@@ -16,6 +16,7 @@ var path *string
 var definition *regexp.Regexp
 var usage *regexp.Regexp
 var excludesPattern *regexp.Regexp
+var parametrizedUsage *regexp.Regexp = regexp.MustCompile(`<[^>]+>`)
 
 var definedSteps map[string]*regexp.Regexp
 var foundUsages map[string]string
@@ -27,6 +28,7 @@ func init() {
 	usage = regexp.MustCompile(`(?:(?:^\s*Given)|(?:^\s*When)|(?:^\s*Then)|(?:^\s*And)|(?:^\s*But))(.*)$`)
 	flag.Parse()
 	excludesPattern = regexp.MustCompile(*excludeUsagePattern)
+	log.Println("Bye!")
 }
 
 func main() {
@@ -88,6 +90,9 @@ func visitDefinitionFiles(path string, info os.FileInfo, err error) error {
 				matches := definition.FindStringSubmatchIndex(text)
 				stepChar := text[matches[1 * 2]:matches[1 * 2 + 1]]
 				matchedDefinition := strings.TrimSpace(text[matches[1 * 2 + 1]:strings.LastIndex(text, stepChar)])
+				if stepChar == "'" {
+					matchedDefinition = strings.Replace(matchedDefinition, `\\`, `\`, -1)
+				}
 				definedSteps[matchedDefinition] = regexp.MustCompile(matchedDefinition)
 			}
 		}
@@ -120,9 +125,15 @@ func visitUsages(path string, info os.FileInfo, err error) error {
 			if usage.MatchString(text) {
 				matches := usage.FindStringSubmatchIndex(text)
 				matchedUsage := strings.TrimSpace(text[matches[1 * 2]:matches[1 * 2 + 1]])
-				if excludesPattern.String() == "" || !excludesPattern.MatchString(path) {
-					foundUsages[matchedUsage] = path
+				if excludesPattern.MatchString(path) {
+					log.Printf("Excluding detected usage %v because of pattern (source file is %v)", matchedUsage, path)
+					continue
 				}
+				if parametrizedUsage.MatchString(matchedUsage) {
+					log.Printf("Excluding detected usage %v because it's parametrized (NYI in this tool)", matchedUsage)
+					continue
+				}
+				foundUsages[matchedUsage] = path
 			}
 		}
 		if err := scanner.Err(); err != nil {
