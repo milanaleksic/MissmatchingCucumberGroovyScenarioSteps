@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -13,132 +14,161 @@ import (
 )
 
 var path *string
-var definition *regexp.Regexp
-var usage *regexp.Regexp
+var verbose *bool
 var excludesPattern *regexp.Regexp
-var parametrizedUsage *regexp.Regexp = regexp.MustCompile(`<[^>]+>`)
 
-var definedSteps map[string]*regexp.Regexp
-var foundUsages map[string]string
+// Version holds the main version string which should be updated externally when building release
+var Version = "undefined"
+var showVersion *bool
+
+type lineProcessorFunc func(string, string)
 
 func init() {
+	showVersion = flag.Bool("version", false, "Get application version")
 	path = flag.String("path", ".", "Where is the cucumber groovy project?")
+	verbose = flag.Bool("verbose", false, "Show verbose run information")
 	excludeUsagePattern := flag.String("excludeUsagePattern", "", "Glob file pattern of which files should be avoided when scanning usages")
-	definition = regexp.MustCompile(`(?:(?:^\s*Given)|(?:^\s*When)|(?:^\s*Then)|(?:^\s*And)|(?:^\s*But))[^/']+([/'])`)
-	usage = regexp.MustCompile(`(?:(?:^\s*Given)|(?:^\s*When)|(?:^\s*Then)|(?:^\s*And)|(?:^\s*But))(.*)$`)
 	flag.Parse()
 	excludesPattern = regexp.MustCompile(*excludeUsagePattern)
-	log.Println("Bye!")
 }
 
 func main() {
+	if *showVersion {
+		fmt.Printf("MissmatchingCucumberGroovyScenarioSteps version: %v\n", Version)
+		return
+	}
 
-	definedSteps = make(map[string]*regexp.Regexp)
-
-	visitedDefinitionFile = make(map[string]bool)
-	err := filepath.Walk(*path, visitDefinitionFiles)
-	if err != nil {
+	definedSteps := make(map[string]*regexp.Regexp)
+	if err := processFiles(isGroovy, createGroovyLineProcessor(definedSteps)); err != nil {
 		log.Fatalf("Error while searching definition files: %v", err)
 	}
-	log.Printf("Unique step definitions found: %d", len(definedSteps))
-	for step := range definedSteps {
-		log.Println(step)
+
+	if *verbose {
+		log.Printf("Unique step definitions found: %d", len(definedSteps))
+		for step := range definedSteps {
+			log.Println(step)
+		}
 	}
 
-	visitedUsageFile = make(map[string]bool)
-	foundUsages = make(map[string]string)
-	err = filepath.Walk(*path, visitUsages)
-	if err != nil {
+	foundUsages := make(map[string]string)
+	if err := processFiles(isFeature, createFeatureLineProcessor(foundUsages)); err != nil {
 		log.Fatalf("Error while searching usages: %v", err)
 	}
-	log.Printf("Unique usages found: %v", len(foundUsages))
+	if *verbose {
+		log.Printf("Unique usages found: %v", len(foundUsages))
+	}
 
-	log.Println("Non-matched usages:")
-	outer:
+	failures := listUnmatched(foundUsages, definedSteps)
+	if len(failures) > 0 {
+		fmt.Println("Non-matched usages:")
+		for _, failure := range failures {
+			fmt.Println(failure)
+		}
+		os.Exit(1)
+	} else {
+		os.Exit(0)
+	}
+}
+
+func isGroovy(path string) bool {
+	return endsWith(path, ".groovy")
+}
+
+func isFeature(path string) bool {
+	return endsWith(path, ".feature")
+}
+
+func createFeatureLineProcessor(foundUsages map[string]string) lineProcessorFunc {
+	usage := regexp.MustCompile(`(?:(?:^\s*Given)|(?:^\s*When)|(?:^\s*Then)|(?:^\s*And)|(?:^\s*But))(.*)$`)
+	return func(path string, line string) {
+		if usage.MatchString(line) {
+			matches := usage.FindStringSubmatchIndex(line)
+			matchedUsage := strings.TrimSpace(line[matches[1*2]:matches[1*2+1]])
+			if excludesPattern.MatchString(path) {
+				if *verbose {
+					log.Printf("Excluding detected usage %v because of pattern (source file is %v)", matchedUsage, path)
+				}
+				return
+			}
+			foundUsages[matchedUsage] = path
+		}
+	}
+}
+
+func createGroovyLineProcessor(definedSteps map[string]*regexp.Regexp) lineProcessorFunc {
+	definition := regexp.MustCompile(`(?:(?:^\s*Given)|(?:^\s*When)|(?:^\s*Then)|(?:^\s*And)|(?:^\s*But))[^/']+([/'])`)
+	return func(path string, line string) {
+		if definition.MatchString(line) {
+			matches := definition.FindStringSubmatchIndex(line)
+			stepChar := line[matches[1*2]:matches[1*2+1]]
+			matchedDefinition := strings.TrimSpace(line[matches[1*2+1]:strings.LastIndex(line, stepChar)])
+			if stepChar == "'" {
+				matchedDefinition = strings.Replace(matchedDefinition, `\\`, `\`, -1)
+			}
+			definedSteps[matchedDefinition] = regexp.MustCompile(matchedDefinition)
+		}
+	}
+}
+
+func listUnmatched(foundUsages map[string]string, definedSteps map[string]*regexp.Regexp) (failures []string) {
+	parametrizedUsage := regexp.MustCompile(`<[^>]+>`)
+	failures = make([]string, 0)
+outer:
 	for usage, file := range foundUsages {
 		for _, pattern := range definedSteps {
 			if pattern.MatchString(usage) {
 				continue outer
 			}
 		}
-		log.Printf("%v:%v", file, usage)
+		if parametrizedUsage.MatchString(usage) {
+			if *verbose {
+				log.Printf("Excluding detected usage %v because it's parametrized (NYI in this tool)", usage)
+			}
+		} else {
+			failures = append(failures, fmt.Sprintf("%v:%v", file, usage))
+		}
 	}
+	return failures
+}
+
+func processFileFunc(filePath string, lineProcessor lineProcessorFunc) error {
+	byteData, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(byteData))
+	for scanner.Scan() {
+		text := scanner.Text()
+		lineProcessor(filePath, text)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func processFiles(pathValid func(string) bool, lineProcessor lineProcessorFunc) error {
+	visitedPath := make(map[string]bool)
+	var walkFunc filepath.WalkFunc
+	walkFunc = func(filePath string, info os.FileInfo, incomingErr error) error {
+		if info == nil || incomingErr != nil {
+			return incomingErr
+		}
+		if info.IsDir() && info.Name() != "." && !visitedPath[filePath] {
+			visitedPath[filePath] = true
+			if err := filepath.Walk(filePath, walkFunc); err != nil {
+				return err
+			}
+		} else if pathValid(filePath) {
+			if err := processFileFunc(filePath, lineProcessor); err != nil {
+				return err
+			}
+		}
+		return incomingErr
+	}
+	return filepath.Walk(*path, walkFunc)
 }
 
 func endsWith(s string, suffix string) bool {
-	return strings.Index(s, suffix) == len(s) - len(suffix)
-}
-
-var visitedDefinitionFile map[string]bool
-
-func visitDefinitionFiles(path string, info os.FileInfo, err error) error {
-	if info == nil {
-		return err
-	}
-	if info.IsDir() && info.Name() != "." && !visitedDefinitionFile[path] {
-		visitedDefinitionFile[path] = true
-		filepath.Walk(path, visitDefinitionFiles)
-	} else if endsWith(path, ".groovy") {
-		byteData, err := ioutil.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		scanner := bufio.NewScanner(bytes.NewReader(byteData))
-		for scanner.Scan() {
-			text := scanner.Text()
-			if definition.MatchString(text) {
-				matches := definition.FindStringSubmatchIndex(text)
-				stepChar := text[matches[1 * 2]:matches[1 * 2 + 1]]
-				matchedDefinition := strings.TrimSpace(text[matches[1 * 2 + 1]:strings.LastIndex(text, stepChar)])
-				if stepChar == "'" {
-					matchedDefinition = strings.Replace(matchedDefinition, `\\`, `\`, -1)
-				}
-				definedSteps[matchedDefinition] = regexp.MustCompile(matchedDefinition)
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return err
-		}
-	}
-	return err
-}
-
-var visitedUsageFile map[string]bool
-
-func visitUsages(path string, info os.FileInfo, err error) error {
-	//TODO: use closure here to simplify
-	//TODO: map can be created here as well instead of being global
-	if info == nil {
-		return err
-	}
-	if info.IsDir() && info.Name() != "." && !visitedUsageFile[path] {
-		visitedUsageFile[path] = true
-		filepath.Walk(path, visitUsages)
-	} else if endsWith(path, ".feature") {
-		byteData, err := ioutil.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		scanner := bufio.NewScanner(bytes.NewReader(byteData))
-		for scanner.Scan() {
-			text := scanner.Text()
-			if usage.MatchString(text) {
-				matches := usage.FindStringSubmatchIndex(text)
-				matchedUsage := strings.TrimSpace(text[matches[1 * 2]:matches[1 * 2 + 1]])
-				if excludesPattern.MatchString(path) {
-					log.Printf("Excluding detected usage %v because of pattern (source file is %v)", matchedUsage, path)
-					continue
-				}
-				if parametrizedUsage.MatchString(matchedUsage) {
-					log.Printf("Excluding detected usage %v because it's parametrized (NYI in this tool)", matchedUsage)
-					continue
-				}
-				foundUsages[matchedUsage] = path
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return err
-		}
-	}
-	return err
+	return strings.Index(s, suffix) == len(s)-len(suffix)
 }

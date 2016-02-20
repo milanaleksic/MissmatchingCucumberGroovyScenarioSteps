@@ -24,4 +24,6 @@ _testmain.go
 *.test
 *.prof
 
-# Created by .ignore support plugin (hsz.mobi)
+upx
+MissmatchingCucumberGroovyScenarioSteps*
+MissmatchingCucumberGroovyScenarioSteps*.exe
