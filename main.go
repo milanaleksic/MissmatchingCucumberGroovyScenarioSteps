@@ -84,7 +84,7 @@ func createFeatureLineProcessor(foundUsages map[string]string) lineProcessorFunc
 		if usage.MatchString(line) {
 			matches := usage.FindStringSubmatchIndex(line)
 			matchedUsage := strings.TrimSpace(line[matches[1*2]:matches[1*2+1]])
-			if excludesPattern.MatchString(path) {
+			if excludesPattern.String() != "" && excludesPattern.MatchString(path) {
 				if *verbose {
 					log.Printf("Excluding detected usage %v because of pattern (source file is %v)", matchedUsage, path)
 				}
