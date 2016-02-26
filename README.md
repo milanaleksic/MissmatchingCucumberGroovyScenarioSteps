@@ -1,6 +1,6 @@
 # Miss-matching Cucumber-Groovy Scenario Steps
 
-[![Build Status](https://semaphoreci.com/api/v1/milanaleksic/MissmatchingCucumberGroovyScenarioSteps/branches/master/badge.svg)](https://semaphoreci.com/milanaleksic/MissmatchingCucumberGroovyScenarioSteps)
+[![Build Status](https://semaphoreci.com/api/v1/milanaleksic/missmatchingcucumbergroovyscenariosteps/branches/master/badge.svg)](https://semaphoreci.com/milanaleksic/missmatchingcucumbergroovyscenariosteps)
 
 This utility finds which steps in Cucumber Groovy `.feature` files refer to non-existing step definitions from `.groovy` files.
 
