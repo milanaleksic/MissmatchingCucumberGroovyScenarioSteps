@@ -159,7 +159,7 @@ func processFiles(pathValid func(string) bool, lineProcessor lineProcessorFunc) 
 			if err := filepath.Walk(filePath, walkFunc); err != nil {
 				return err
 			}
-		} else if pathValid(filePath) {
+		} else if !info.IsDir() && pathValid(filePath) {
 			if err := processFileFunc(filePath, lineProcessor); err != nil {
 				return err
 			}
