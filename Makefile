@@ -1,4 +1,5 @@
-APP_NAME := MissmatchingCucumberGroovyScenarioSteps
+PACKAGE := $(shell go list -e)
+APP_NAME = $(lastword $(subst /, ,$(PACKAGE)))
 
 include gomakefiles/common.mk
 include gomakefiles/metalinter.mk
